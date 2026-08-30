@@ -774,14 +774,15 @@ where
     tracing::info!(file=?&path, "Adding file system file to tarball");
 
     let path = fs::canonicalise(path)?;
+    let root = fs::canonicalise(paths.root())?;
 
-    let Ok(path) = path.strip_prefix(paths.root()) else {
+    let Ok(relative_path) = path.strip_prefix(&root) else {
         return Err(Error::TarPathOutsideOfProjectRoot { path });
     };
 
     tarball
-        .append_path(path)
-        .map_err(|error| Error::add_tar(path, error))
+        .append_path_with_name(&path, relative_path)
+        .map_err(|error| Error::add_tar(relative_path, error))
 }
 
 #[test]
@@ -789,7 +790,9 @@ fn add_to_tar_symlink_rejection_test() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let path = std::fs::canonicalize(tmp_dir.path()).unwrap();
     let path = Utf8Path::from_path(&path).expect("Non Utf-8 Path");
-    let paths = ProjectPaths::new(path.join("package"));
+    let root = path.join("package");
+    std::fs::create_dir(&root).unwrap();
+    let paths = ProjectPaths::new(root);
     let mut contents_tar_gz = Vec::new();
     let mut tarball = tar::Builder::new(&mut contents_tar_gz);
 
@@ -801,6 +804,34 @@ fn add_to_tar_symlink_rejection_test() {
         Error::TarPathOutsideOfProjectRoot { path } => assert_eq!(path, outside_path),
         other => panic!("Unexpected error {other:?}"),
     }
+}
+
+// https://github.com/gleam-lang/gleam/issues/6184
+#[test]
+fn add_to_tar_non_canonical_root_test() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let root = Utf8Path::from_path(tmp_dir.path()).expect("Non Utf-8 Path");
+    let paths = ProjectPaths::new(root.to_path_buf());
+    let mut contents_tar_gz = Vec::new();
+
+    let src = root.join("src");
+    std::fs::create_dir(&src).unwrap();
+    let inside_path = src.join("inside.gleam");
+    std::fs::write(&inside_path, "Hello").unwrap();
+
+    {
+        let mut tarball = tar::Builder::new(&mut contents_tar_gz);
+        add_to_tar_from_file_system(&mut tarball, &paths, &inside_path).unwrap();
+        tarball.finish().unwrap();
+    }
+
+    let mut archive = tar::Archive::new(contents_tar_gz.as_slice());
+    let entries = archive
+        .entries()
+        .unwrap()
+        .map(|entry| entry.unwrap().path().unwrap().to_string_lossy().to_string())
+        .collect_vec();
+    assert_eq!(entries, vec!["src/inside.gleam".to_string()]);
 }
 
 #[derive(Debug, Clone)]

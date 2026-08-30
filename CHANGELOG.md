@@ -265,6 +265,10 @@
   comparison warning, which is incorrect on Erlang/OTP 27+.
   ([Jack Programs](https://github.com/jackprogramsjp))
 
+- Fixed a bug where `gleam publish` and `gleam export hex-tarball` would fail on
+  Windows, claiming that the project's own files were outside of the project.
+  ([John Downey](https://github.com/jtdowney))
+
 ## v1.18.1 - 2026-08-01
 
 - Fixed a bug where the Erlang code generator would generate wrong code when

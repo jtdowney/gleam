@@ -219,6 +219,13 @@ jobs:
         working-directory: ./test/project_erlang
         if: ${{ matrix.run-integration-tests }}
 
+      - name: test/hextarball
+        run: ./test.sh
+        working-directory: ./test/hextarball
+        if: ${{ matrix.run-integration-tests }}
+        env:
+          GLEAM_COMMAND: gleam
+
       - name: test/external_only_javascript
         run: ./test.sh
         working-directory: ./test/external_only_javascript
@@ -502,7 +509,7 @@ jobs:
         working-directory: ./test/typescript_declarations
 
       - name: Test export of hex tarball
-        run: make test
+        run: ./test.sh
         working-directory: ./test/hextarball
 
       - name: test/running_modules
