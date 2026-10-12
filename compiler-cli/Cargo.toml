@@ -73,5 +73,6 @@ xxhash-rust.workspace = true
 [dev-dependencies]
 # Setting file modification times for tests
 filetime = "0.2"
+erlang-consult = { path = "../erlang-consult" }
 pretty_assertions.workspace = true
 insta.workspace = true

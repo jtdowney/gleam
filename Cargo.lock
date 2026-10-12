@@ -1147,6 +1147,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
+name = "erlang-consult"
+version = "1.0.0"
+dependencies = [
+ "num-bigint 0.5.1",
+ "pretty_assertions",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "erlang-generation"
 version = "1.0.0"
 dependencies = [
@@ -1513,6 +1522,7 @@ dependencies = [
  "ctrlc",
  "debug-ignore",
  "ecow",
+ "erlang-consult",
  "filetime",
  "flate2",
  "fs_extra",

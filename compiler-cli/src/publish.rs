@@ -992,8 +992,9 @@ fn release_metadata_as_erlang() {
         ],
         build_tools: vec!["gleam", "rebar3"],
     };
+    let erlang = meta.as_erlang();
     assert_eq!(
-        meta.as_erlang(),
+        erlang,
         r#"{<<"name">>, <<"myapp"/utf8>>}.
 {<<"app">>, <<"myapp"/utf8>>}.
 {<<"version">>, <<"1.2.3"/utf8>>}.
@@ -1032,6 +1033,18 @@ fn release_metadata_as_erlang() {
 "#
         .to_string()
     );
+    let terms = erlang_consult::read_all(erlang.as_bytes()).unwrap();
+    assert!(terms.contains(&erlang_consult::Term::Tuple(vec![
+        erlang_consult::Term::Binary(b"app".to_vec()),
+        erlang_consult::Term::Binary(b"myapp".to_vec()),
+    ])));
+    assert!(terms.contains(&erlang_consult::Term::Tuple(vec![
+        erlang_consult::Term::Binary(b"build_tools".to_vec()),
+        erlang_consult::Term::List(vec![
+            erlang_consult::Term::Binary(b"gleam".to_vec()),
+            erlang_consult::Term::Binary(b"rebar3".to_vec()),
+        ]),
+    ])));
 }
 
 #[test]

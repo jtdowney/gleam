@@ -18,6 +18,7 @@ members = [
   "hexpm",
   "pretty-arena",
   "format",
+  "erlang-consult",
   "erlang-term-format",
   "erlang-generation",
   "src-span",
