@@ -2,12 +2,11 @@
 // SPDX-FileCopyrightText: 2025 The Gleam contributors
 
 use ecow::EcoString;
-use futures::future;
 use gleam_core::{
     Error, Result,
     build::{Mode, Telemetry},
     config::PackageConfig,
-    dependency,
+    dependency, hex,
     manifest::{Manifest, ManifestPackageSource, PackageChanges, Resolved},
     paths::ProjectPaths,
     requirement::Requirement,
@@ -18,13 +17,14 @@ use crate::{
     build_lock::BuildLock,
     dependencies::{pretty_print_major_versions_available, write_manifest_to_disc},
     fs::ProjectIO,
+    http::HttpClient,
 };
 
 use super::{
-    CheckMajorVersions, LocalPackages, UseManifest, add_missing_packages, is_same_requirements,
-    lookup_hex_package, path_dependency_configs_unchanged, provide_git_package,
-    provide_local_package, read_manifest_from_disc, remove_extra_packages, unlock_packages,
-    verified_releases,
+    CheckMajorVersions, LocalPackages, Untar, UseManifest, hex_manifest_package,
+    is_same_requirements, path_dependency_configs_unchanged, provide_git_package,
+    provide_local_package, read_manifest_from_disc, reuse_release_meta, unlock_packages,
+    update_local_packages, verified_releases,
 };
 
 /// Verifies that all specified packages exist in the manifest.
@@ -135,16 +135,19 @@ where
         };
 
         tracing::debug!("manifest_outdated");
-        let new_manifest = self.perform_version_resolution(
+        let mut new_manifest = self.perform_version_resolution(
             paths,
             config,
             manifest_for_resolver,
-            packages_to_update,
+            packages_to_update.clone(),
         )?;
+        let unread_release_meta =
+            reuse_release_meta(&mut new_manifest, &existing_manifest, &packages_to_update);
         let resolved = Resolved {
             package_changes: PackageChanges::between_manifests(&existing_manifest, &new_manifest),
             manifest: new_manifest,
             requirements_changed,
+            unread_release_meta,
         };
         Ok(resolved)
     }
@@ -164,8 +167,6 @@ where
 
         let lock = BuildLock::new_packages(paths)?;
         let _guard = lock.lock(&self.telemetry);
-
-        let fs = ProjectIO::boxed();
 
         // Read the project config
         let mut config = crate::config::read(paths.root_config())?;
@@ -226,17 +227,23 @@ where
         }
 
         // Determine what versions we need
-        let resolved = self.resolve_versions(paths, &config, packages_to_update)?;
+        let mut resolved = self.resolve_versions(paths, &config, packages_to_update)?;
         let local = LocalPackages::read_from_disc(paths)?;
 
-        // Remove any packages that are no longer required due to gleam.toml changes
-        remove_extra_packages(paths, &local, &resolved.manifest, &self.telemetry)?;
-
-        // Download them from Hex to the local cache
-        self.runtime.block_on(add_missing_packages(
+        // Remove packages no longer required and download the missing ones
+        let downloader = hex::Downloader::new(
+            ProjectIO::boxed(),
+            ProjectIO::boxed(),
+            HttpClient::boxed(),
+            Untar::boxed(),
+            crate::hex::read_env_readonly_api_key(),
+            paths.clone(),
+        );
+        self.runtime.block_on(update_local_packages(
             paths,
-            fs,
-            &resolved.manifest,
+            &downloader,
+            &mut resolved.manifest,
+            &resolved.unread_release_meta,
             &local,
             project_name,
             &self.telemetry,
@@ -355,26 +362,23 @@ where
             verified_releases(&self.package_fetcher, &resolved, &provided_packages)?;
 
         // Convert the hex packages and local packages into manifest packages
-        let credentials = crate::hex::read_env_readonly_api_key();
-        let manifest_packages =
-            self.runtime
-                .block_on(future::try_join_all(resolved.into_iter().map(
-                    |(name, version)| async {
-                        // Local and git packages are provided directly; hex packages
-                        // are looked up and pinned to their signed release metadata.
-                        match provided_packages.get(name.as_str()) {
-                            Some(package) => Ok(package.to_manifest_package(name.as_str())),
-                            None => {
-                                let verified = verified_releases
-                                    .get(&name)
-                                    .cloned()
-                                    .expect("verified_releases covers every resolved hex package");
-                                lookup_hex_package(name, version, verified, credentials.as_ref())
-                                    .await
-                            }
-                        }
-                    },
-                )))?;
+        let manifest_packages = resolved
+            .into_iter()
+            .map(|(name, version)| {
+                // Local and git packages are provided directly; hex packages
+                // are looked up and pinned to their signed release metadata.
+                match provided_packages.get(name.as_str()) {
+                    Some(package) => package.to_manifest_package(name.as_str()),
+                    None => {
+                        let verified = verified_releases
+                            .get(&name)
+                            .cloned()
+                            .expect("verified_releases covers every resolved hex package");
+                        hex_manifest_package(name, version, verified)
+                    }
+                }
+            })
+            .collect();
 
         let manifest = Manifest {
             packages: manifest_packages,

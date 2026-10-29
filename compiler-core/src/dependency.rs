@@ -128,7 +128,6 @@ where
             retirement_status: None,
             requirements,
             security_advisories: vec![],
-            meta: (),
         }],
     };
 
@@ -1312,7 +1311,7 @@ but it is locked to 0.2.0, which is incompatible."
         requirements: Vec<(&str, &str)>,
         reason: hexpm::RetirementReason,
         message: &str,
-    ) -> Release<()> {
+    ) -> Release {
         Release {
             retirement_status: Some(RetirementStatus {
                 reason,
@@ -1321,7 +1320,7 @@ but it is locked to 0.2.0, which is incompatible."
             ..release(version, requirements)
         }
     }
-    fn release(version: &str, requirements: Vec<(&str, &str)>) -> Release<()> {
+    fn release(version: &str, requirements: Vec<(&str, &str)>) -> Release {
         release_with_optional(version, requirements, vec![])
     }
 
@@ -1329,7 +1328,7 @@ but it is locked to 0.2.0, which is incompatible."
         version: &str,
         requirements: Vec<(&str, &str)>,
         optional_requirements: Vec<(&str, &str)>,
-    ) -> Release<()> {
+    ) -> Release {
         let mut all_requirements = HashMap::new();
 
         for (name, range) in requirements {
@@ -1360,11 +1359,10 @@ but it is locked to 0.2.0, which is incompatible."
             retirement_status: None,
             outer_checksum: vec![1, 2, 3],
             security_advisories: vec![],
-            meta: (),
         }
     }
 
-    fn remote(dependencies: Vec<(&str, Vec<Release<()>>)>) -> Remote {
+    fn remote(dependencies: Vec<(&str, Vec<Release>)>) -> Remote {
         let mut deps = HashMap::new();
         for (package, releases) in dependencies {
             let _ = deps.insert(

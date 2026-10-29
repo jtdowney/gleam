@@ -40,8 +40,7 @@ mod tests;
 use crate::{
     TreeOptions,
     build_lock::{BuildLock, Guard},
-    cli,
-    fs::{self, ProjectIO},
+    cli, fs,
     http::HttpClient,
     text_layout::space_table,
 };
@@ -477,61 +476,55 @@ fn pretty_print_outdated_versions(
     }
 }
 
-async fn add_missing_packages<Telem: Telemetry>(
+/// Bring the build packages directory in line with the manifest, removing
+/// packages it no longer contains and downloading the ones it's missing.
+async fn update_local_packages<Telem: Telemetry>(
     paths: &ProjectPaths,
-    fs: Box<ProjectIO>,
-    manifest: &Manifest,
+    downloader: &hex::Downloader,
+    manifest: &mut Manifest,
+    unread_release_meta: &[EcoString],
     local: &LocalPackages,
     project_name: EcoString,
     telemetry: &Telem,
 ) -> Result<(), Error> {
-    let missing_packages = local.missing_local_packages(manifest, &project_name);
+    let num_to_download = local.missing_local_packages(manifest, &project_name).len();
+    let start = Instant::now();
+    if num_to_download > 0 {
+        telemetry.downloading_package("packages");
+    }
 
-    let mut num_to_download = 0;
+    let needs_metadata = manifest
+        .packages
+        .iter_mut()
+        .filter(|package| unread_release_meta.contains(&package.name))
+        .map(|package| downloader.read_release_meta(package));
+    let _ = futures::future::try_join_all(needs_metadata).await?;
+
+    remove_extra_packages(paths, local, manifest, telemetry)?;
+
+    let missing_packages = local.missing_local_packages(manifest, &project_name);
+    let missing_hex_packages = missing_packages
+        .iter()
+        .copied()
+        .filter(|package| package.is_hex());
+    downloader
+        .download_hex_packages(missing_hex_packages, &project_name)
+        .await?;
 
     let missing_git_packages = missing_packages
         .iter()
         .copied()
-        .filter(|package| package.is_git())
-        .inspect(|_| {
-            num_to_download += 1;
-        })
-        .collect_vec();
+        .filter(|package| package.is_git());
+    for package in missing_git_packages {
+        let ManifestPackageSource::Git { repo, commit, path } = &package.source else {
+            continue;
+        };
 
-    let mut missing_hex_packages = missing_packages
-        .iter()
-        .copied()
-        .filter(|package| package.is_hex())
-        .inspect(|_| {
-            num_to_download += 1;
-        })
-        .peekable();
+        let checkout = download_git_package(&package.name, repo, commit, path.as_deref(), paths)?;
+        checkout.cleanup()?;
+    }
 
-    // If we need to download at-least one package
-    if missing_hex_packages.peek().is_some() || !missing_git_packages.is_empty() {
-        let http = HttpClient::boxed();
-        let downloader = hex::Downloader::new(
-            fs.clone(),
-            fs,
-            http,
-            Untar::boxed(),
-            crate::hex::read_env_readonly_api_key(),
-            paths.clone(),
-        );
-        let start = Instant::now();
-        telemetry.downloading_package("packages");
-        downloader
-            .download_hex_packages(missing_hex_packages, &project_name)
-            .await?;
-        for package in missing_git_packages {
-            let ManifestPackageSource::Git { repo, commit, path } = &package.source else {
-                continue;
-            };
-
-            let checkout =
-                download_git_package(&package.name, repo, commit, path.as_deref(), paths)?;
-            checkout.cleanup()?;
-        }
+    if num_to_download > 0 {
         telemetry.packages_downloaded(start, num_to_download);
     }
 
@@ -922,7 +915,6 @@ impl ProvidedPackage {
             retirement_status: None,
             outer_checksum: vec![],
             security_advisories: vec![],
-            meta: (),
         };
         hexpm::Package {
             name: name.as_str().into(),
@@ -1723,39 +1715,62 @@ fn verified_releases(
         .collect()
 }
 
-async fn lookup_hex_package(
-    name: String,
-    version: Version,
-    verified: VerifiedRelease,
-    credentials: Option<&hexpm::Credentials>,
-) -> Result<ManifestPackage> {
-    let config = hexpm::Config::new();
-    let release =
-        hex::get_package_release(&name, &version, credentials, &config, &HttpClient::new()).await?;
-    Ok(hex_manifest_package(name, version, verified, release.meta))
-}
-
+/// Build the manifest entry for a resolved Hex package. The OTP application
+/// name and build tools are left empty. They're reused from the previous
+/// manifest or read from the package tarball when it's downloaded.
 fn hex_manifest_package(
     name: String,
     version: Version,
     verified: VerifiedRelease,
-    meta: hexpm::ReleaseMeta,
 ) -> ManifestPackage {
-    let build_tools = meta
-        .build_tools
-        .iter()
-        .map(|tool| EcoString::from(tool.as_str()))
-        .collect_vec();
     ManifestPackage {
         name: name.into(),
         version,
-        otp_app: Some(meta.app.into()),
-        build_tools,
+        otp_app: None,
+        build_tools: vec![],
         requirements: verified.requirements,
         source: ManifestPackageSource::Hex {
             outer_checksum: Base16Checksum(verified.outer_checksum),
         },
     }
+}
+
+/// Copy the release metadata recorded in `previous` onto Hex packages that
+/// resolve to the same release, so only new releases need their tarball
+/// read.
+fn reuse_release_meta(
+    manifest: &mut Manifest,
+    previous: &Manifest,
+    refresh: &[EcoString],
+) -> Vec<EcoString> {
+    let mut unread = vec![];
+
+    let hex_packages = manifest
+        .packages
+        .iter_mut()
+        .filter(|package| package.is_hex());
+    for package in hex_packages {
+        let old = previous
+            .packages
+            .iter()
+            .find(|old| {
+                old.name == package.name
+                    && old.version == package.version
+                    && old.source == package.source
+                    && old.otp_app.is_some()
+            })
+            .filter(|_| !refresh.contains(&package.name));
+
+        match old {
+            Some(old) => {
+                package.otp_app = old.otp_app.clone();
+                package.build_tools = old.build_tools.clone();
+            }
+            None => unread.push(package.name.clone()),
+        }
+    }
+
+    unread
 }
 
 struct PackageFetcher {

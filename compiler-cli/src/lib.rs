@@ -155,8 +155,8 @@ pub enum Command {
     /// Build the project
     ///
     /// This command optionally accepts the environment variable
-    /// `HEXPM_READ_API_KEY`, which can hold a Hex API key to authenticate
-    /// with Hex with a higher rate limit.
+    /// `HEXPM_READ_API_KEY`, which can hold a Hex API key used to
+    /// authenticate requests to the Hex repository.
     ///
     #[command(verbatim_doc_comment)]
     Build {
@@ -285,8 +285,8 @@ pub enum Command {
     /// control repository.
     ///
     /// This command optionally accepts the environment variable
-    /// `HEXPM_READ_API_KEY`, which can hold a Hex API key to authenticate
-    /// with Hex with a higher rate limit.
+    /// `HEXPM_READ_API_KEY`, which can hold a Hex API key used to
+    /// authenticate requests to the Hex repository.
     ///
     #[command(subcommand, verbatim_doc_comment)]
     Deps(Dependencies),
@@ -294,8 +294,8 @@ pub enum Command {
     /// Update dependency packages to their latest versions
     ///
     /// This command optionally accepts the environment variable
-    /// `HEXPM_READ_API_KEY`, which can hold a Hex API key to authenticate
-    /// with Hex with a higher rate limit.
+    /// `HEXPM_READ_API_KEY`, which can hold a Hex API key used to
+    /// authenticate requests to the Hex repository.
     ///
     #[command(verbatim_doc_comment)]
     Update(UpdateOptions),

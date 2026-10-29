@@ -1582,6 +1582,7 @@ dependencies = [
  "debug-ignore",
  "dirs-next",
  "ecow",
+ "erlang-consult",
  "erlang-generation",
  "flate2",
  "futures",

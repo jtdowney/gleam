@@ -7,12 +7,15 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ecow::EcoString;
 use hexpm::version::Version;
 use pretty_assertions::assert_eq;
+use sha2::Digest;
 
 use gleam_core::{
     Error,
-    build::Runtime,
+    build::{Mode, NullTelemetry, Runtime, Target},
     config::{DenoConfig, DenoFlag, Docs, ErlangConfig, JavaScriptConfig},
     dependency::{PackageFetchError, PackageFetcher},
+    hex,
+    io::{Content, OutputFile, memory::InMemoryFileSystem},
     manifest::{Base16Checksum, Manifest, ManifestPackage, ManifestPackageSource},
     paths::ProjectPaths,
     requirement::Requirement,
@@ -650,7 +653,6 @@ fn provided_local_to_hex() {
             retirement_status: None,
             outer_checksum: vec![],
             security_advisories: vec![],
-            meta: (),
             requirements: [
                 (
                     "req_1".into(),
@@ -711,7 +713,6 @@ fn provided_git_to_hex() {
             version: Version::new(1, 0, 0),
             retirement_status: None,
             outer_checksum: vec![],
-            meta: (),
             security_advisories: vec![],
             requirements: [
                 (
@@ -1995,7 +1996,6 @@ fn signed_package(
             requirements,
             retirement_status: None,
             outer_checksum,
-            meta: (),
             security_advisories: vec![],
         }],
         advisories: vec![],
@@ -2123,35 +2123,234 @@ fn verified_releases_skips_provided_packages() {
     );
 }
 
+fn resolved_manifest() -> Manifest {
+    Manifest {
+        requirements: HashMap::new(),
+        packages: vec![hex_manifest_package(
+            "wibble".into(),
+            Version::parse("1.0.0").unwrap(),
+            VerifiedRelease {
+                outer_checksum: vec![0x01, 0x02, 0x03],
+                requirements: vec!["gleam_stdlib".into()],
+            },
+        )],
+    }
+}
+
+fn previous_manifest(version: &str, outer_checksum: Vec<u8>) -> Manifest {
+    Manifest {
+        requirements: HashMap::new(),
+        packages: vec![ManifestPackage {
+            otp_app: Some("wibble_app".into()),
+            source: ManifestPackageSource::Hex {
+                outer_checksum: Base16Checksum(outer_checksum),
+            },
+            ..manifest_package("wibble", version, vec![])
+        }],
+    }
+}
+
 #[test]
 fn hex_manifest_package_uses_verified_checksum_and_requirements() {
     let verified = VerifiedRelease {
         outer_checksum: vec![0x01, 0x02, 0x03],
         requirements: vec!["gleam_stdlib".into()],
     };
-    let meta = hexpm::ReleaseMeta {
-        app: "wibble_app".into(),
-        build_tools: vec!["gleam".into()],
-    };
 
-    let package = hex_manifest_package(
-        "wibble".into(),
-        Version::parse("1.0.0").unwrap(),
-        verified,
-        meta,
-    );
+    let package = hex_manifest_package("wibble".into(), Version::parse("1.0.0").unwrap(), verified);
 
     assert_eq!(
         package,
         ManifestPackage {
             name: "wibble".into(),
             version: Version::parse("1.0.0").unwrap(),
-            build_tools: vec!["gleam".into()],
-            otp_app: Some("wibble_app".into()),
+            build_tools: vec![],
+            otp_app: None,
             requirements: vec!["gleam_stdlib".into()],
             source: ManifestPackageSource::Hex {
                 outer_checksum: Base16Checksum(vec![0x01, 0x02, 0x03]),
             },
         }
+    );
+}
+
+#[test]
+fn reuse_release_meta_copies_metadata_of_same_release() {
+    let mut manifest = resolved_manifest();
+
+    assert_eq!(
+        reuse_release_meta(
+            &mut manifest,
+            &previous_manifest("1.0.0", vec![0x01, 0x02, 0x03]),
+            &[],
+        ),
+        Vec::<EcoString>::new()
+    );
+    assert_eq!(manifest.packages[0].otp_app, Some("wibble_app".into()));
+    assert_eq!(
+        manifest.packages[0].build_tools,
+        vec![EcoString::from("gleam")]
+    );
+}
+
+#[test]
+fn reuse_release_meta_rereads_entry_without_app() {
+    let mut manifest = resolved_manifest();
+    let mut previous = previous_manifest("1.0.0", vec![0x01, 0x02, 0x03]);
+    previous.packages[0].otp_app = None;
+
+    assert_eq!(
+        reuse_release_meta(&mut manifest, &previous, &[]),
+        vec![EcoString::from("wibble")]
+    );
+    assert_eq!(manifest, resolved_manifest());
+}
+
+#[test]
+fn reuse_release_meta_ignores_different_checksum() {
+    let mut manifest = resolved_manifest();
+
+    assert_eq!(
+        reuse_release_meta(
+            &mut manifest,
+            &previous_manifest("1.0.0", vec![0x0A, 0x0B]),
+            &[]
+        ),
+        vec![EcoString::from("wibble")]
+    );
+    assert_eq!(manifest, resolved_manifest());
+}
+
+#[test]
+fn reuse_release_meta_skips_refreshed_packages() {
+    let mut manifest = resolved_manifest();
+
+    assert_eq!(
+        reuse_release_meta(
+            &mut manifest,
+            &previous_manifest("1.0.0", vec![0x01, 0x02, 0x03]),
+            &["wibble".into()],
+        ),
+        vec![EcoString::from("wibble")]
+    );
+    assert_eq!(manifest, resolved_manifest());
+}
+
+#[test]
+fn reuse_release_meta_ignores_different_version() {
+    let mut manifest = resolved_manifest();
+
+    assert_eq!(
+        reuse_release_meta(
+            &mut manifest,
+            &previous_manifest("2.0.0", vec![0x01, 0x02, 0x03]),
+            &[],
+        ),
+        vec![EcoString::from("wibble")]
+    );
+    assert_eq!(manifest, resolved_manifest());
+}
+
+/// Serves the same package tarball for every request.
+struct TarballHttpClient(Vec<u8>);
+
+#[async_trait::async_trait]
+impl gleam_core::io::HttpClient for TarballHttpClient {
+    async fn send(
+        &self,
+        _request: http::Request<Vec<u8>>,
+    ) -> Result<http::Response<Vec<u8>>, Error> {
+        Ok(http::Response::builder()
+            .status(200)
+            .body(self.0.clone())
+            .unwrap())
+    }
+}
+
+fn tar_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, contents) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        builder.append_data(&mut header, path, *contents).unwrap();
+    }
+    builder.into_inner().unwrap()
+}
+
+#[test]
+fn update_local_packages_reads_release_meta_before_replacing_packages() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+    let paths = ProjectPaths::new(root);
+
+    let old_build = paths.build_directory_for_package(Mode::Dev, Target::Erlang, "wibble_app");
+    let package_dir = paths.build_packages_package("wibble");
+    fs::mkdir(&old_build).unwrap();
+    fs::write(
+        &package_dir.join("gleam.toml"),
+        "name = \"wibble\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    let new_config = "name = \"wibble\"\nversion = \"2.0.0\"\n";
+    let contents = fs::create_tar_archive(vec![OutputFile {
+        content: Content::Text(new_config.into()),
+        path: "gleam.toml".into(),
+    }])
+    .unwrap();
+    let metadata = br#"{<<"app">>,<<"wibble_app">>}.
+{<<"build_tools">>,[<<"gleam">>]}.
+"#;
+    let tarball = tar_bytes(&[
+        ("metadata.config", metadata),
+        ("contents.tar.gz", &contents),
+    ]);
+    let mut manifest = Manifest {
+        requirements: HashMap::new(),
+        packages: vec![ManifestPackage {
+            build_tools: vec![],
+            source: ManifestPackageSource::Hex {
+                outer_checksum: Base16Checksum(sha2::Sha256::digest(&tarball).to_vec()),
+            },
+            ..manifest_package("wibble", "2.0.0", vec![])
+        }],
+    };
+    let local = LocalPackages {
+        packages: [("wibble".into(), Version::parse("1.0.0").unwrap())].into(),
+        git: HashMap::new(),
+    };
+    let cache = InMemoryFileSystem::new();
+    let downloader = hex::Downloader::new(
+        Box::new(cache.clone()),
+        Box::new(cache),
+        Box::new(TarballHttpClient(tarball)),
+        Untar::boxed(),
+        None,
+        paths.clone(),
+    );
+
+    assert_eq!(
+        futures::executor::block_on(update_local_packages(
+            &paths,
+            &downloader,
+            &mut manifest,
+            &["wibble".into()],
+            &local,
+            "root".into(),
+            &NullTelemetry,
+        )),
+        Ok(())
+    );
+
+    assert_eq!(manifest.packages[0].otp_app, Some("wibble_app".into()));
+    assert_eq!(
+        manifest.packages[0].build_tools,
+        vec![EcoString::from("gleam")]
+    );
+    assert!(!old_build.exists());
+    assert_eq!(
+        fs::read(package_dir.join("gleam.toml")),
+        Ok(new_config.into())
     );
 }

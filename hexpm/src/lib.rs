@@ -16,15 +16,15 @@ use flate2::read::GzDecoder;
 use http::{Method, StatusCode};
 use prost::Message;
 use regex::Regex;
-use ring::digest::{Context, SHA256};
+use ring::digest::SHA256;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{
     collections::HashMap,
     convert::{TryFrom, TryInto},
-    io::{BufReader, Read},
+    io::Read,
 };
 use thiserror::Error;
 use version::{Range, Version};
@@ -455,8 +455,17 @@ pub fn repository_get_package_tarball_response(
             return Err(ApiError::unexpected_response(status, body));
         }
     };
-    let body = read_and_check_body(body.reader(), checksum)?;
+    verify_package_tarball(&body, checksum)?;
     Ok(body)
+}
+
+/// Ensure a package tarball has the given sha256 checksum.
+pub fn verify_package_tarball(tarball: &[u8], checksum: &[u8]) -> Result<(), ApiError> {
+    if ring::digest::digest(&SHA256, tarball).as_ref() == checksum {
+        Ok(())
+    } else {
+        Err(ApiError::IncorrectChecksum)
+    }
 }
 
 /// API Docs:
@@ -818,32 +827,6 @@ impl ApiError {
     }
 }
 
-/// Read a body and ensure it has the given sha256 digest.
-fn read_and_check_body(reader: impl std::io::Read, checksum: &[u8]) -> Result<Vec<u8>, ApiError> {
-    use std::io::Read;
-    let mut reader = BufReader::new(reader);
-    let mut context = Context::new(&SHA256);
-    let mut buffer = [0; 1024];
-    let mut body = Vec::new();
-
-    loop {
-        let count = reader.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        let bytes = &buffer[..count];
-        context.update(bytes);
-        body.extend_from_slice(bytes);
-    }
-
-    let digest = context.finish();
-    if digest.as_ref() == checksum {
-        Ok(body)
-    } else {
-        Err(ApiError::IncorrectChecksum)
-    }
-}
-
 fn proto_to_retirement_status(
     status: Option<proto::package::RetirementStatus>,
 ) -> Option<RetirementStatus> {
@@ -890,7 +873,7 @@ fn proto_to_dependency(
 fn proto_to_release(
     release: proto::package::Release,
     package_advisories: &[SecurityAdvisory],
-) -> Result<Release<()>, ApiError> {
+) -> Result<Release, ApiError> {
     let dependencies = release
         .dependencies
         .into_iter()
@@ -909,7 +892,6 @@ fn proto_to_release(
         retirement_status: proto_to_retirement_status(release.retired),
         requirements: dependencies,
         security_advisories,
-        meta: (),
     })
 }
 
@@ -959,13 +941,13 @@ pub struct Package {
     /// Name of repository
     pub repository: String,
     /// All releases of the package
-    pub releases: Vec<Release<()>>,
+    pub releases: Vec<Release>,
     /// All security advisories affecting any release of the package
     pub advisories: Vec<SecurityAdvisory>,
 }
 
-#[derive(Debug, PartialEq, Clone, serde::Deserialize)]
-pub struct Release<Meta> {
+#[derive(Debug, PartialEq, Clone)]
+pub struct Release {
     /// Release version
     pub version: Version,
     /// All dependencies of the release
@@ -975,69 +957,18 @@ pub struct Release<Meta> {
     pub retirement_status: Option<RetirementStatus>,
     /// sha256 checksum of outer package tarball
     /// required when encoding but optional when decoding
-    #[serde(alias = "checksum", deserialize_with = "deserialize_checksum")]
     pub outer_checksum: Vec<u8>,
     /// Security advisories affecting this release of the package
-    #[serde(default)]
     pub security_advisories: Vec<SecurityAdvisory>,
-    /// This is not present in all API endpoints so may be absent sometimes.
-    pub meta: Meta,
 }
 
-fn deserialize_checksum<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s: &str = serde::de::Deserialize::deserialize(deserializer)?;
-    base16::decode(s).map_err(serde::de::Error::custom)
-}
-
-impl<Meta> Release<Meta> {
+impl Release {
     pub fn is_retired(&self) -> bool {
         self.retirement_status.is_some()
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, serde::Deserialize)]
-pub struct ReleaseMeta {
-    #[serde(deserialize_with = "deserialize_package_name")]
-    pub app: String,
-    pub build_tools: Vec<String>,
-}
-
-static PACKAGE_NAME_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("^[a-z][a-z0-9_]*$").expect("name regex"));
-
-fn deserialize_package_name<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    if PACKAGE_NAME_PATTERN.is_match(&value) {
-        Ok(value)
-    } else {
-        Err(serde::de::Error::custom("not a valid package name"))
-    }
-}
-
-fn deserialise_optional_package_name<'de, D>(deserialiser: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value: Option<&str> = Deserialize::deserialize(deserialiser)?;
-    match value {
-        Some(name) => {
-            if PACKAGE_NAME_PATTERN.is_match(name) {
-                Ok(Some(name.into()))
-            } else {
-                Err(serde::de::Error::custom("not a valid package name"))
-            }
-        }
-        None => Ok(None),
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RetirementStatus {
     pub reason: RetirementReason,
     pub message: String,
@@ -1052,23 +983,6 @@ pub enum RetirementReason {
     Renamed,
 }
 
-impl<'de> serde::Deserialize<'de> for RetirementReason {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s: &str = serde::de::Deserialize::deserialize(deserializer)?;
-        match s {
-            "other" => Ok(RetirementReason::Other),
-            "invalid" => Ok(RetirementReason::Invalid),
-            "security" => Ok(RetirementReason::Security),
-            "deprecated" => Ok(RetirementReason::Deprecated),
-            "renamed" => Ok(RetirementReason::Renamed),
-            _ => Err(serde::de::Error::custom("unknown retirement reason type")),
-        }
-    }
-}
-
 impl RetirementReason {
     pub fn to_str(&self) -> &'static str {
         match self {
@@ -1081,7 +995,7 @@ impl RetirementReason {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, serde::Deserialize)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct SecurityAdvisory {
     /// Advisory identifier (e.g. GHSA-xxxx-xxxx-xxxx or CVE-xxxx-xxxxx)
     pub id: String,
@@ -1109,23 +1023,6 @@ pub enum AdvisorySeverity {
     Critical,
 }
 
-impl<'de> serde::Deserialize<'de> for AdvisorySeverity {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s: &str = serde::de::Deserialize::deserialize(deserializer)?;
-        match s {
-            "none" => Ok(AdvisorySeverity::None),
-            "low" => Ok(AdvisorySeverity::Low),
-            "medium" => Ok(AdvisorySeverity::Medium),
-            "high" => Ok(AdvisorySeverity::High),
-            "critical" => Ok(AdvisorySeverity::Critical),
-            _ => Err(serde::de::Error::custom("unknown advisory severity type")),
-        }
-    }
-}
-
 impl AdvisorySeverity {
     pub fn to_str(&self) -> &'static str {
         match self {
@@ -1138,14 +1035,13 @@ impl AdvisorySeverity {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Dependency {
     /// Version requirement of dependency
     pub requirement: Range,
     /// If true the package is optional and does not need to be resolved
     /// unless another package has specified it as a non-optional dependency.
     pub optional: bool,
-    #[serde(deserialize_with = "deserialise_optional_package_name")]
     /// If set is the OTP application name of the dependency, if not set the
     /// application name is the same as the package name
     pub app: Option<String>,
@@ -1199,40 +1095,6 @@ fn verify_payload(mut signed: Signed, pem_public_key: &[u8]) -> Result<Vec<u8>, 
         Ok(payload)
     } else {
         Err(ApiError::IncorrectPayloadSignature)
-    }
-}
-
-/// Create a request to get the information for a package release.
-///
-pub fn api_get_package_release_request(
-    name: &str,
-    version: &str,
-    credentials: Option<&Credentials>,
-    config: &Config,
-) -> http::Request<Vec<u8>> {
-    let path = format!("packages/{name}/releases/{version}");
-    config
-        .api_request(Method::GET, &path)
-        .read_credentials(credentials)
-        .header("accept", "application/json")
-        .body(vec![])
-        .expect("get_package_release request")
-}
-
-/// Parse a response to get the information for a package release.
-///
-pub fn api_get_package_release_response(
-    response: http::Response<Vec<u8>>,
-) -> Result<Release<ReleaseMeta>, ApiError> {
-    let (parts, body) = response.into_parts();
-
-    match parts.status {
-        StatusCode::OK => Ok(serde_json::from_slice(&body)?),
-        StatusCode::NOT_FOUND => Err(ApiError::NotFound),
-        StatusCode::TOO_MANY_REQUESTS => Err(ApiError::RateLimited),
-        StatusCode::UNAUTHORIZED => Err(unauthorised_response(&parts.headers)),
-        StatusCode::FORBIDDEN => Err(ApiError::Forbidden),
-        status => Err(ApiError::unexpected_response(status, body)),
     }
 }
 

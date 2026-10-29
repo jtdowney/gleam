@@ -604,6 +604,9 @@ pub struct Resolved {
     pub manifest: Manifest,
     pub package_changes: PackageChanges,
     pub requirements_changed: bool,
+    /// Hex packages whose OTP application name and build tools have not been
+    /// read from their tarball yet.
+    pub unread_release_meta: Vec<EcoString>,
 }
 
 #[derive(Debug)]
@@ -636,7 +639,9 @@ pub struct ChangedGit {
 
 impl Resolved {
     pub fn any_changes(&self) -> bool {
-        self.requirements_changed || self.package_changes.any_changes()
+        self.requirements_changed
+            || self.package_changes.any_changes()
+            || !self.unread_release_meta.is_empty()
     }
 
     pub fn all_added(manifest: Manifest) -> Resolved {
@@ -645,7 +650,14 @@ impl Resolved {
             .iter()
             .map(|package| (package.name.clone(), package.version.clone()))
             .collect();
+        let unread_release_meta = manifest
+            .packages
+            .iter()
+            .filter(|package| package.is_hex())
+            .map(|package| package.name.clone())
+            .collect();
         Self {
+            unread_release_meta,
             manifest,
             requirements_changed: true,
             package_changes: PackageChanges {
@@ -660,6 +672,7 @@ impl Resolved {
     pub fn no_change(manifest: Manifest) -> Self {
         Self {
             manifest,
+            unread_release_meta: vec![],
             requirements_changed: false,
             package_changes: PackageChanges {
                 added: vec![],
@@ -758,7 +771,7 @@ mod manifest_update_tests {
 
     use crate::manifest::{
         Base16Checksum, Changed, ChangedGit, Manifest, ManifestPackage, ManifestPackageSource,
-        PackageChanges,
+        PackageChanges, Resolved,
     };
 
     #[test]
@@ -833,6 +846,45 @@ mod manifest_update_tests {
             changes.removed,
             vec![EcoString::from("removed1"), EcoString::from("removed2")]
         );
+    }
+
+    #[test]
+    fn resolved_with_unread_release_meta() {
+        let package = |name: &str, source| ManifestPackage {
+            name: EcoString::from(name),
+            version: Version::new(1, 0, 0),
+            build_tools: vec![],
+            otp_app: None,
+            requirements: vec![],
+            source,
+        };
+        let manifest = Manifest {
+            requirements: HashMap::new(),
+            packages: vec![
+                package(
+                    "wibble",
+                    ManifestPackageSource::Hex {
+                        outer_checksum: Base16Checksum(vec![]),
+                    },
+                ),
+                package(
+                    "wobble",
+                    ManifestPackageSource::Local {
+                        path: "wobble".into(),
+                    },
+                ),
+            ],
+        };
+
+        assert_eq!(
+            Resolved::all_added(manifest.clone()).unread_release_meta,
+            vec![EcoString::from("wibble")]
+        );
+
+        let mut resolved = Resolved::no_change(manifest);
+        assert!(!resolved.any_changes());
+        resolved.unread_release_meta = vec!["wibble".into()];
+        assert!(resolved.any_changes());
     }
 
     #[test]

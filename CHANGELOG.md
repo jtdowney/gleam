@@ -54,6 +54,11 @@
   owner only (0600 on Unix), preventing other users from reading it.
   ([bala-bhargav](https://github.com/bala-bhargav))
 
+- The build tool now reads a Hex dependency's application name and build
+  tools from the package itself instead of the Hex API, avoiding API rate
+  limits when resolving dependencies.
+  ([John Downey](https://github.com/jtdowney))
+
 ### Language server
 
 - The language server will now offer "Discard unused variable" on each of
@@ -242,6 +247,10 @@
 - Fixed a bug where the "Generate type" code action would put the generated type
   in between a function and its documentation.
   ([Giacomo Cavalieri](https://github.com/giacomocavalieri))
+
+- Fixed a bug where a corrupt or partially downloaded package in the global
+  cache would be used instead of being downloaded again.
+  ([John Downey](https://github.com/jtdowney))
 
 ## v1.19.2 - 2026-10-12
 

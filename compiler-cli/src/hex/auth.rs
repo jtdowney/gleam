@@ -370,9 +370,8 @@ fn read_env_api_key() -> Option<hexpm::Credentials> {
 /// Read a Hex API key from the `HEXPM_READ_API_KEY` environment variable, if one
 /// is set.
 ///
-/// This is used to authenticate otherwise anonymous read requests (dependency
-/// resolution and package downloads) so that they are subject to Hex's higher
-/// per-user rate limits rather than the stricter per-IP limits.
+/// This is used to authenticate otherwise anonymous requests to the Hex
+/// repository, for dependency resolution and package downloads.
 pub fn read_env_readonly_api_key() -> Option<hexpm::Credentials> {
     api_key_credentials(&std::env::var(READONLY_API_ENV_NAME).unwrap_or_default())
 }

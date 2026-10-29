@@ -438,7 +438,6 @@ fn expected_package_exfmt() -> Package {
                     18, 232, 249, 225, 29, 12, 246, 5, 215, 165, 32, 57, 179, 110,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.1.0").unwrap(),
@@ -449,7 +448,6 @@ fn expected_package_exfmt() -> Package {
                     52, 245, 8, 216, 139, 21, 232, 200, 16, 214, 59, 241, 188, 9, 6,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.2.0").unwrap(),
@@ -460,7 +458,6 @@ fn expected_package_exfmt() -> Package {
                     195, 238, 100, 91, 78, 100, 213, 181, 101, 154, 106, 168, 170, 107,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.2.1").unwrap(),
@@ -471,7 +468,6 @@ fn expected_package_exfmt() -> Package {
                     105, 222, 37, 221, 80, 181, 183, 113, 240, 234, 107, 144, 85, 255, 65,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.2.2").unwrap(),
@@ -482,7 +478,6 @@ fn expected_package_exfmt() -> Package {
                     250, 133, 138, 252, 202, 240, 74, 197, 228, 235, 81, 18, 241, 7, 155, 38,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.2.3").unwrap(),
@@ -493,7 +488,6 @@ fn expected_package_exfmt() -> Package {
                     162, 38, 247, 52, 176, 189, 17, 7, 188, 151, 152, 24, 64, 170, 29,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.2.4").unwrap(),
@@ -504,7 +498,6 @@ fn expected_package_exfmt() -> Package {
                     117, 247, 201, 218, 228, 14, 160, 115, 157, 196, 51, 108, 16, 96, 217,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.3.0").unwrap(),
@@ -515,7 +508,6 @@ fn expected_package_exfmt() -> Package {
                     80, 218, 152, 178, 227, 152, 242, 32, 126, 72, 67, 222, 0, 173, 170,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.4.0").unwrap(),
@@ -526,7 +518,6 @@ fn expected_package_exfmt() -> Package {
                     186, 4, 73, 53, 226, 235, 144, 209, 84, 231, 136, 165, 119, 122, 126,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
             Release {
                 version: Version::try_from("0.5.0").unwrap(),
@@ -537,7 +528,6 @@ fn expected_package_exfmt() -> Package {
                     252, 59, 207, 246, 49, 22, 21, 52, 47, 51, 139, 190, 9, 95, 109,
                 ],
                 security_advisories: vec![],
-                meta: (),
             },
         ],
     }
@@ -870,89 +860,6 @@ fn unknown_error_422() {
 }
 
 #[test]
-fn get_package_release_request() {
-    let config = Config::new();
-    let request = crate::api_get_package_release_request("clint", "0.0.1", None, &config);
-
-    assert_eq!(request.method(), http::Method::GET);
-    assert_eq!(request.uri().path(), "/api/packages/clint/releases/0.0.1");
-    assert_eq!(request.headers().get("accept").unwrap(), "application/json");
-}
-
-#[test]
-fn get_package_release_response_not_found() {
-    let response = make_response(404, vec![]);
-    let error = crate::api_get_package_release_response(response).unwrap_err();
-
-    assert!(error.is_not_found());
-}
-
-#[test]
-fn get_package_release_response_ok() {
-    let response_body = json!({
-        "version": "0.0.1",
-        "checksum": "41C6781B5F4B986BCE14C3578D39C497BCB8427F1D36D8CDE5FCAA6E03CAE2B1",
-        "requirements": {
-            "plug": {
-                "requirement": "~>0.11.0",
-                "optional": false,
-                "app": "plug"
-            },
-            "cowboy": {
-                "requirement": "~>1.0.0",
-                "optional": false,
-                "app": "cowboy"
-            }
-        },
-        "security_advisories": [],
-        "meta": {
-            "app": "clint",
-            "build_tools": ["mix"]
-        }
-    });
-    let response = make_json_response(200, response_body);
-    let response = crate::api_get_package_release_response(response).unwrap();
-
-    assert_eq!(
-        response,
-        Release {
-            version: Version::new(0, 0, 1),
-            security_advisories: vec![],
-            requirements: [
-                (
-                    "plug".into(),
-                    Dependency {
-                        requirement: Range::new("~>0.11.0".into()).unwrap(),
-                        optional: false,
-                        app: Some("plug".into()),
-                        repository: None
-                    }
-                ),
-                (
-                    "cowboy".into(),
-                    Dependency {
-                        requirement: Range::new("~>1.0.0".into()).unwrap(),
-                        optional: false,
-                        app: Some("cowboy".into()),
-                        repository: None
-                    }
-                )
-            ]
-            .into(),
-            retirement_status: None,
-            outer_checksum: vec![
-                65, 198, 120, 27, 95, 75, 152, 107, 206, 20, 195, 87, 141, 57, 196, 151, 188, 184,
-                66, 127, 29, 54, 216, 205, 229, 252, 170, 110, 3, 202, 226, 177
-            ],
-            meta: ReleaseMeta {
-                app: "clint".into(),
-                build_tools: vec!["mix".into()]
-            }
-        }
-    )
-}
-
-#[test]
 fn make_request_base_trailing_slash_is_optional() {
     let slash = http::Uri::from_static("http://host/path/");
     let no_slash = http::Uri::from_static("http://host/path");
@@ -1185,51 +1092,5 @@ fn poll_token_response_unexpected_status() {
             http::StatusCode::INTERNAL_SERVER_ERROR,
             _
         ))
-    );
-}
-
-#[test]
-fn get_package_release_response_requirement_invalid_app_name() {
-    let response_body = json!({
-        "version": "0.0.1",
-        "checksum": "41C6781B5F4B986BCE14C3578D39C497BCB8427F1D36D8CDE5FCAA6E03CAE2B1",
-        "requirements": {
-            "plug": {
-                "requirement": "~>0.11.0",
-                "optional": false,
-                "app": "../invalid/package/name"
-            },
-        },
-        "security_advisories": [],
-        "meta": {
-            "app": "clint",
-            "build_tools": ["mix"]
-        }
-    });
-    let response = make_json_response(200, response_body);
-    let error = crate::api_get_package_release_response(response).unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "not a valid package name at line 1 column 179"
-    );
-}
-
-#[test]
-fn get_package_release_response_meta_invalid_app_name() {
-    let response_body = json!({
-        "version": "0.0.1",
-        "checksum": "41C6781B5F4B986BCE14C3578D39C497BCB8427F1D36D8CDE5FCAA6E03CAE2B1",
-        "requirements": {},
-        "security_advisories": [],
-        "meta": {
-            "app": "../invalid/package/name",
-            "build_tools": ["mix"]
-        }
-    });
-    let response = make_json_response(200, response_body);
-    let error = crate::api_get_package_release_response(response).unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "not a valid package name at line 1 column 118"
     );
 }
