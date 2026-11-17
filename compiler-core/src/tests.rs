@@ -149,6 +149,7 @@ fn all_files_have_copyright_notice() {
 
                 // Generated files
                 "toml" if file_name == "manifest.toml" => return None,
+                "lock" => return None,
 
                 // Source files
                 "config" if file_name == "rebar.config" => (),

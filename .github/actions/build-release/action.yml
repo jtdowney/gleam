@@ -56,7 +56,7 @@ runs:
   using: "composite"
   steps:
     - name: Install Rust toolchain
-      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
       with:
         toolchain: ${{ inputs.toolchain }}
         target: ${{ inputs.target }}
@@ -70,7 +70,7 @@ runs:
 
     - name: Build WASM release binary
       if: ${{ inputs.target != 'wasm32-unknown-unknown' }}
-      uses: clechasseur/rs-cargo@62dc8b04d9946cc72018b0c80bd0695ba1f89426 # v5.1.1
+      uses: clechasseur/rs-cargo@v5.1.1
       with:
         command: build
         args: --release --target ${{ inputs.target }}
@@ -121,14 +121,14 @@ runs:
     # * https://azure.microsoft.com/en-us/products/trusted-signing
     - name: Log in to Azure
       if: ${{ contains(inputs.target, '-windows-') && inputs.azure-tenant-id && inputs.azure-subscription-id && inputs.azure-client-id && inputs.azure-trusted-signing-account-name && inputs.azure-certificate-profile-name }}
-      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      uses: azure/login@v3.1.0
       with:
         client-id: ${{ inputs.azure-client-id }}
         tenant-id: ${{ inputs.azure-tenant-id }}
         subscription-id: ${{ inputs.azure-subscription-id }}
     - name: Windows Code Signing
       if: ${{ contains(inputs.target, '-windows-') && inputs.azure-tenant-id && inputs.azure-subscription-id && inputs.azure-client-id && inputs.azure-trusted-signing-account-name && inputs.azure-certificate-profile-name }}
-      uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+      uses: azure/artifact-signing-action@v2.0.0
       with:
         endpoint: https://eus.codesigning.azure.net/
         signing-account-name: ${{ inputs.azure-trusted-signing-account-name }}
@@ -192,7 +192,7 @@ runs:
 
     - name: Install Erlang
       if: ${{ inputs.generate-gleam-licences-html == 'true' }}
-      uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+      uses: erlef/setup-beam@v1.24.1
       with:
         otp-version: "29"
         rebar3-version: "3"
@@ -265,7 +265,7 @@ runs:
     # * https://github.com/actions/attest-sbom
     - name: Attest Distribution Assets with SBoM
       id: attest-sbom
-      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      uses: actions/attest@v4.2.2
       with:
         subject-path: |
           ${{ steps.build.outputs.archive }}
@@ -285,7 +285,7 @@ runs:
         ATTESTATION: "${{ steps.attest-sbom.outputs.bundle-path }}"
 
     - name: Upload artifact
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: release-${{ matrix.target }}
         path: |
